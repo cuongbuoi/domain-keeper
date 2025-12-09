@@ -1,0 +1,5 @@
+{
+  "name": "DomainKeeper",
+  "description": "Ứng dụng quản lý gia hạn Domain và Hosting, theo dõi ngày hết hạn và tạo email nhắc nhở tự động bằng AI.",
+  "requestFramePermissions": []
+}
