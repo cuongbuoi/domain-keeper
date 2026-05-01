@@ -1,4 +1,4 @@
-import { ObjectId, type WithId, type Document } from 'mongodb'
+import type { ObjectId, WithId, Document } from 'mongodb'
 
 export type ServiceDoc = {
   domain: string
@@ -22,8 +22,10 @@ export function serializeService(doc: WithId<Document>) {
   }
 }
 
-export function toObjectId(id: unknown): ObjectId | null {
-  if (typeof id !== 'string' || !ObjectId.isValid(id)) return null
+export async function toObjectId(id: unknown): Promise<ObjectId | null> {
+  if (typeof id !== 'string') return null
+  const { ObjectId } = await import('mongodb')
+  if (!ObjectId.isValid(id)) return null
   return new ObjectId(id)
 }
 

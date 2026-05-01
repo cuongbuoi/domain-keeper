@@ -4,7 +4,7 @@ import { pickServicePayload, serializeService, toObjectId, type ServiceDoc } fro
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const _id = toObjectId(req.query.id)
+    const _id = await toObjectId(req.query.id)
     if (!_id) return res.status(400).json({ error: 'Invalid id' })
 
     const db = await getDb()
