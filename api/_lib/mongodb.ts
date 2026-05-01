@@ -1,22 +1,28 @@
 import { MongoClient, type Db } from 'mongodb'
 
-const uri = process.env.MONGODB_URI
-const dbName = process.env.MONGODB_DB || 'domainkeeper'
-
-if (!uri) {
-  throw new Error('MONGODB_URI is required')
-}
-
 declare global {
   // eslint-disable-next-line no-var
   var _mongoClientPromise: Promise<MongoClient> | undefined
 }
 
-const clientPromise: Promise<MongoClient> =
-  global._mongoClientPromise ?? (global._mongoClientPromise = new MongoClient(uri).connect())
+function getClientPromise(): Promise<MongoClient> {
+  if (global._mongoClientPromise) return global._mongoClientPromise
+
+  const uri = process.env.MONGODB_URI
+  if (!uri) {
+    throw new Error('MONGODB_URI is not set in environment variables')
+  }
+
+  // serverSelectionTimeoutMS thấp để fail nhanh thay vì treo function 30s
+  global._mongoClientPromise = new MongoClient(uri, {
+    serverSelectionTimeoutMS: 10_000
+  }).connect()
+  return global._mongoClientPromise
+}
 
 export async function getDb(): Promise<Db> {
-  const client = await clientPromise
+  const client = await getClientPromise()
+  const dbName = process.env.MONGODB_DB || 'domainkeeper'
   return client.db(dbName)
 }
 
