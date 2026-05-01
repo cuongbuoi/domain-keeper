@@ -25,3 +25,7 @@ cert
 *.sw?
 .env
 .cursor
+
+# DB backups & Vercel local config
+db_backup_*.sql
+.vercel

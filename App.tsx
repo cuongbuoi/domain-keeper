@@ -4,7 +4,7 @@ import { calculateRenewalStatus, formatCurrency, formatDate, getStatusColor } fr
 import { StatsCard } from './components/StatsCard'
 import { ServiceFormModal } from './components/ServiceFormModal'
 import { SettingsModal } from './components/SettingsModal'
-import { supabase } from './utils/supabaseClient'
+import { api } from './utils/apiClient'
 import { generateRenewalEmail } from './services/geminiService'
 
 function App() {
@@ -16,83 +16,35 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [notificationLog, setNotificationLog] = useState<string[]>([])
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [showSqlHelp, setShowSqlHelp] = useState(false)
 
   // State cho việc sửa dịch vụ
   const [editingService, setEditingService] = useState<ServiceRecord | null>(null)
-
-  // --- Helper: Handle Database Errors ---
-  const handleDbError = (error: any, context: string) => {
-    console.error(`Error in ${context}:`, error)
-
-    // 42P01: Undefined table
-    // 42703: Undefined column
-    if (error.code === '42P01' || error.code === '42703') {
-      setErrorMsg(`Lỗi cấu trúc dữ liệu: ${context}. Vui lòng cập nhật database.`)
-      setShowSqlHelp(true)
-    } else {
-      alert(`Lỗi ${context}: ${error.message}`)
-    }
-  }
 
   // --- Fetch Data ---
   const fetchData = async () => {
     setLoading(true)
     setErrorMsg(null)
     try {
-      // 1. Fetch Services
-      const { data: servicesData, error: servicesError } = await supabase
-        .from('services')
-        .select('*')
-        .order('registration_date', { ascending: true })
+      const [servicesData, settingsData] = await Promise.all([api.listServices(), api.getSettings()])
 
-      if (servicesError) {
-        if (servicesError.code === '42P01') {
-          setShowSqlHelp(true)
-          throw new Error('Chưa tìm thấy bảng dữ liệu trong Supabase. Vui lòng chạy lệnh SQL (xem bên dưới).')
-        }
-        throw servicesError
-      }
-
-      // Map snake_case from DB to camelCase for frontend
-      const mappedServices: ServiceRecord[] = (servicesData || []).map((item: any) => ({
-        id: item.id.toString(),
+      const mappedServices: ServiceRecord[] = servicesData.map((item: any) => ({
+        id: item.id,
         domain: item.domain,
-        customerName: item.customer_name,
-        customerEmail: item.customer_email,
-        registrationDate: item.registration_date,
-        amount: item.amount,
+        customerName: item.customerName,
+        customerEmail: item.customerEmail,
+        registrationDate: item.registrationDate,
+        amount: Number(item.amount),
         type: item.type as ServiceType,
         notes: item.notes,
-        lastNotifiedYear: item.last_notified_year || 0,
-        lastPaymentYear: item.last_payment_year || 0
+        lastNotifiedYear: item.lastNotifiedYear || 0,
+        lastPaymentYear: item.lastPaymentYear || 0
       }))
 
       setServices(mappedServices)
-
-      // 2. Fetch Settings
-      const { data: settingsData, error: settingsError } = await supabase.from('settings').select('*').limit(1).single()
-
-      // Ignore error code PGRST116 (JSON object requested, multiple (or no) rows returned) which happens if table empty
-      if (settingsError && settingsError.code !== 'PGRST116') {
-        console.warn('Settings fetch warning:', settingsError.message)
-      }
-
-      if (settingsData) {
-        setAdminEmail(settingsData.admin_email)
-      } else {
-        // Try to create default if table exists but is empty
-        try {
-          const { error: insertError } = await supabase.from('settings').insert([{ admin_email: 'admin@example.com' }])
-          if (!insertError) setAdminEmail('admin@example.com')
-        } catch (e) {
-          console.log('Could not insert default settings, likely table missing.')
-        }
-      }
+      setAdminEmail(settingsData.adminEmail)
     } catch (error: any) {
-      console.error('Error fetching data:', JSON.stringify(error, null, 2))
-      const message = error.message || 'Lỗi kết nối Supabase. Vui lòng kiểm tra cấu hình Key và URL.'
-      setErrorMsg(message)
+      console.error('Error fetching data:', error)
+      setErrorMsg(error.message || 'Lỗi kết nối API.')
     } finally {
       setLoading(false)
     }
@@ -113,29 +65,17 @@ function App() {
       if (status.daysRemaining <= 2 && status.daysRemaining >= 0 && service.lastNotifiedYear !== currentYear) {
         logs.push(`Đang xử lý tự động cho: ${service.domain}...`)
 
-        // 1. Tạo nội dung email bằng AI
         try {
           const emailContent = await generateRenewalEmail(service)
-
-          // 2. Ở đây chúng ta MÔ PHỎNG việc gửi email
           console.log(`--- MÔ PHỎNG GỬI EMAIL ĐẾN ADMIN (${email}) ---`)
           console.log(emailContent)
 
-          // 3. Cập nhật DB để không gửi lại
-          const { error } = await supabase
-            .from('services')
-            .update({ last_notified_year: currentYear })
-            .eq('id', service.id)
+          await api.patchService(service.id, { lastNotifiedYear: currentYear })
 
-          if (!error) {
-            logs.push(`✅ Đã gửi báo cáo gia hạn ${service.domain} tới ${email}`)
-            // Cập nhật state local
-            setServices((prev) => prev.map((s) => (s.id === service.id ? { ...s, lastNotifiedYear: currentYear } : s)))
-          } else {
-            logs.push(`❌ Lỗi cập nhật trạng thái cho ${service.domain}`)
-          }
-        } catch (err) {
-          logs.push(`❌ Lỗi tạo AI nội dung cho ${service.domain}`)
+          logs.push(`✅ Đã gửi báo cáo gia hạn ${service.domain} tới ${email}`)
+          setServices((prev) => prev.map((s) => (s.id === service.id ? { ...s, lastNotifiedYear: currentYear } : s)))
+        } catch (err: any) {
+          logs.push(`❌ Lỗi xử lý ${service.domain}: ${err.message ?? 'unknown'}`)
         }
       }
     }
@@ -161,67 +101,49 @@ function App() {
 
   const handleSaveService = async (data: Omit<ServiceRecord, 'id'>) => {
     try {
-      const payload = {
+      const payload: Omit<ServiceRecord, 'id'> = {
         domain: data.domain,
-        customer_name: data.customerName,
-        customer_email: data.customerEmail,
-        registration_date: data.registrationDate,
+        customerName: data.customerName,
+        customerEmail: data.customerEmail,
+        registrationDate: data.registrationDate,
         amount: data.amount,
         type: data.type,
         notes: data.notes,
-        // Nếu đang sửa, giữ nguyên các trường tracking, nếu thêm mới thì là 0 hoặc lấy từ form (được truyền qua data)
-        last_notified_year: editingService ? editingService.lastNotifiedYear : 0,
-        last_payment_year: data.lastPaymentYear || (editingService ? editingService.lastPaymentYear : 0)
+        lastNotifiedYear: editingService ? editingService.lastNotifiedYear : 0,
+        lastPaymentYear: data.lastPaymentYear || (editingService ? editingService.lastPaymentYear : 0)
       }
 
       if (editingService) {
-        // Update logic
-        const { error } = await supabase.from('services').update(payload).eq('id', editingService.id)
-
-        if (error) throw error
+        await api.updateService(editingService.id, payload)
       } else {
-        // Insert logic
-        const { error } = await supabase.from('services').insert([payload])
-
-        if (error) throw error
+        await api.createService(payload)
       }
 
-      // Refresh data và đóng form
       fetchData()
       setIsFormOpen(false)
       setEditingService(null)
     } catch (error: any) {
-      handleDbError(error, 'lưu dịch vụ')
+      alert(`Lỗi lưu dịch vụ: ${error.message}`)
     }
   }
 
   const handleTogglePayment = async (service: ServiceRecord) => {
     const currentYear = new Date().getFullYear()
     const isPaidThisYear = service.lastPaymentYear === currentYear
-
-    // Nếu đã trả rồi thì reset về 0 (hoặc năm ngoái), nếu chưa thì set thành năm nay
     const newPaymentYear = isPaidThisYear ? 0 : currentYear
 
     try {
-      const { error } = await supabase
-        .from('services')
-        .update({ last_payment_year: newPaymentYear })
-        .eq('id', service.id)
-
-      if (error) throw error
-
-      // Update local state
+      await api.patchService(service.id, { lastPaymentYear: newPaymentYear })
       setServices((prev) => prev.map((s) => (s.id === service.id ? { ...s, lastPaymentYear: newPaymentYear } : s)))
     } catch (error: any) {
-      handleDbError(error, 'cập nhật trạng thái thanh toán')
+      alert(`Lỗi cập nhật thanh toán: ${error.message}`)
     }
   }
 
   const handleDelete = async (id: string) => {
     if (window.confirm('Bạn có chắc chắn muốn xóa dịch vụ này?')) {
       try {
-        const { error } = await supabase.from('services').delete().eq('id', id)
-        if (error) throw error
+        await api.deleteService(id)
         setServices(services.filter((s) => s.id !== id))
       } catch (error: any) {
         alert(`Lỗi khi xóa: ${error.message}`)
@@ -241,17 +163,11 @@ function App() {
 
   const handleSaveSettings = async (newEmail: string) => {
     try {
-      const { data } = await supabase.from('settings').select('id').limit(1).single()
-
-      if (data) {
-        await supabase.from('settings').update({ admin_email: newEmail }).eq('id', data.id)
-      } else {
-        await supabase.from('settings').insert({ admin_email: newEmail })
-      }
+      await api.updateSettings(newEmail)
       setAdminEmail(newEmail)
       alert('Đã lưu cài đặt email Admin.')
     } catch (error: any) {
-      handleDbError(error, 'lưu cài đặt')
+      alert(`Lỗi lưu cài đặt: ${error.message}`)
     }
   }
 
@@ -286,11 +202,11 @@ function App() {
     return { totalRevenue, collectedRevenue, expiringSoon }
   }, [services, processedServices])
 
-  // --- Setup Help UI ---
-  if (showSqlHelp || errorMsg) {
+  // --- Error UI ---
+  if (errorMsg) {
     return (
       <div className='min-h-screen bg-slate-50 flex items-center justify-center p-4'>
-        <div className='bg-white p-8 rounded-xl shadow-lg max-w-2xl w-full'>
+        <div className='bg-white p-8 rounded-xl shadow-lg max-w-xl w-full'>
           <div className='flex items-center gap-3 text-red-600 mb-4'>
             <svg className='w-8 h-8' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
               <path
@@ -300,45 +216,15 @@ function App() {
                 d='M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'
               />
             </svg>
-            <h1 className='text-2xl font-bold'>Lỗi Kết Nối Cơ Sở Dữ Liệu</h1>
+            <h1 className='text-2xl font-bold'>Lỗi Kết Nối</h1>
           </div>
 
           <p className='text-gray-700 mb-4 font-medium'>{errorMsg}</p>
 
-          <div className='bg-slate-100 p-4 rounded-lg border border-slate-300 overflow-x-auto'>
-            <p className='text-sm text-slate-500 mb-2'>
-              Nếu bạn chưa tạo bảng hoặc thiếu cột, hãy chạy lệnh SQL sau trong Supabase SQL Editor:
-            </p>
-            <pre className='text-xs text-slate-800 font-mono'>
-              {`-- 1. Tạo bảng services (Nếu chưa có)
-create table if not exists services (
-  id bigint generated by default as identity primary key,
-  domain text not null,
-  customer_name text not null,
-  customer_email text,
-  registration_date date not null,
-  amount numeric not null,
-  type text not null,
-  notes text,
-  last_notified_year int default 0,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
-);
-
--- 2. Thêm cột trạng thái thanh toán (Nếu bảng đã có từ trước)
-alter table services add column if not exists last_payment_year int default 0;
-
--- 3. Tạo bảng settings
-create table if not exists settings (
-  id bigint generated by default as identity primary key,
-  admin_email text not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
-);
-
--- Dữ liệu mẫu
-insert into settings (admin_email) values ('admin@example.com');
-`}
-            </pre>
-          </div>
+          <p className='text-sm text-slate-500'>
+            Hãy kiểm tra biến môi trường <code>MONGODB_URI</code> và <code>MONGODB_DB</code> trên Vercel hoặc trong file{' '}
+            <code>.env</code>.
+          </p>
 
           <div className='mt-6 flex justify-end gap-3'>
             <button
@@ -559,7 +445,7 @@ insert into settings (admin_email) values ('admin@example.com');
                 {loading ? (
                   <tr>
                     <td colSpan={7} className='px-6 py-12 text-center text-gray-500 text-sm'>
-                      Đang tải dữ liệu từ Supabase...
+                      Đang tải dữ liệu...
                     </td>
                   </tr>
                 ) : filteredServices.length === 0 ? (
