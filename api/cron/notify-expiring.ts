@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import * as nodemailer from 'nodemailer'
-import { getDb, COLLECTIONS } from '../_lib/mongodb'
-import { type ServiceDoc } from '../_lib/serializer'
+import { getDb, COLLECTIONS } from '../_lib/mongodb.js'
+import { type ServiceDoc } from '../_lib/serializer.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
