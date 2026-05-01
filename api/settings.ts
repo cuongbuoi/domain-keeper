@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getDb, COLLECTIONS } from './_lib/mongodb'
+import { getDb, COLLECTIONS } from './_lib/mongodb.js'
 
 type SettingsDoc = {
   adminEmail: string

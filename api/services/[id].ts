@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getDb, COLLECTIONS } from '../_lib/mongodb'
-import { pickServicePayload, serializeService, toObjectId, type ServiceDoc } from '../_lib/serializer'
+import { getDb, COLLECTIONS } from '../_lib/mongodb.js'
+import { pickServicePayload, serializeService, toObjectId, type ServiceDoc } from '../_lib/serializer.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
